@@ -13,22 +13,35 @@ class Importmap::Commands < Thor
   option :env, type: :string, aliases: :e, default: "production"
   option :from, type: :string, aliases: :f, default: "jspm"
   option :download, type: :boolean, aliases: :d, default: false
+  option :scope, type: :boolean, aliases: :s, default: false
   def pin(*packages)
-    if imports = packager.import(*packages, env: options[:env], from: options[:from])
+    if importmap = packager.import(*packages, env: options[:env], from: options[:from])
+      imports = importmap["imports"]
+      scopes = importmap["scopes"]
+      
       imports.each do |package, url|
         if options[:download]
           puts %(Pinning "#{package}" to #{packager.vendor_path}/#{package}.js via download from #{url})
           packager.download(package, url)
-          pin = packager.vendored_pin_for(package, url)
+          packager.upsert(package, url, vendored: true, scope: nil)
         else
           puts %(Pinning "#{package}" to #{url})
-          pin = packager.pin_for(package, url)
+          packager.upsert(package, url, vendored: false, scope: nil)
         end
+      end
 
-        if packager.packaged?(package)
-          gsub_file("config/importmap.rb", /^pin "#{package}".*$/, pin, verbose: false)
-        else
-          append_to_file("config/importmap.rb", "#{pin}\n", verbose: false)
+      if options[:scope] && scopes
+        scopes.each do |scope, packages|
+          packages.each do |package, url|
+            if options[:download]
+              puts %(Pinning "#{package}" to #{packager.vendor_path}/#{package}.js under scope #{scope} via download from #{url})
+              packager.download(package, url) # Check how the file structure ought to work with scopes - is possibly fine
+              packager.upsert(package, url, vendored: true, scope: scope)
+            else
+              puts %(Pinning "#{package}" to #{url})
+              packager.upsert(package, url, vendored: false, scope: scope)
+            end
+          end
         end
       end
     else
@@ -40,8 +53,13 @@ class Importmap::Commands < Thor
   option :env, type: :string, aliases: :e, default: "production"
   option :from, type: :string, aliases: :f, default: "jspm"
   option :download, type: :boolean, aliases: :d, default: false
+  option :scope, type: :boolean, aliases: :s, default: false
+
   def unpin(*packages)
-    if imports = packager.import(*packages, env: options[:env], from: options[:from])
+    if importmap = packager.import(*packages, env: options[:env], from: options[:from])
+      imports = importmap["imports"]
+      scopes = importmap["scopes"]
+      
       imports.each do |package, url|
         if packager.packaged?(package)
           if options[:download]
@@ -53,6 +71,23 @@ class Importmap::Commands < Thor
           packager.remove(package)
         end
       end
+
+      # Need analogous mechanic for removing pins from scopes
+      # need to modify Packager private method #remove_package_from_importmap
+      # to attend to the file as with the #upsert method
+
+      # Both methods should match structures within the file and then append or gsub
+      # why not new class that tends to the importmap file?
+      # Currently Packager
+      # 
+      # retrieves JSON from API
+      # downloads vendored packages, removes them and oversees the file system
+      # provides pin strings for packages to be written in importmap file
+      # removes pins from importmap file
+
+      # and I want to also add the entire "upsert" responsibility to Packager. This is a lot
+  
+
     else
       puts "Couldn't find any packages in #{packages.inspect} on #{options[:from]}"
     end
@@ -116,6 +151,15 @@ class Importmap::Commands < Thor
     def npm
       @npm ||= Importmap::Npm.new
     end
+
+
+    # def generate_scope_output(path, scope, packages)
+    #   prefix = "scope \"#{scope}\" do\n"
+    #   suffix = "end\n"
+    #   lines = packages.reduce("") { |obj, (package, url)| obj + "  #{packager.pin_for(package, url)}\n" }
+
+    #   append_to_file(path, prefix + lines + suffix, verbose: false)
+    # end
 
     def remove_line_from_file(path, pattern)
       path = File.expand_path(path, destination_root)

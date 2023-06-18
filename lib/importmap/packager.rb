@@ -26,7 +26,7 @@ class Importmap::Packager
     })
 
     case response.code
-    when "200"        then extract_parsed_imports(response)
+    when "200"        then extract_parsed_importmap(response)
     when "404", "401" then nil
     else                   handle_failure_response(response)
     end
@@ -47,8 +47,18 @@ class Importmap::Packager
     end
   end
 
-  def packaged?(package)
-    importmap.match(/^pin ["']#{package}["'].*$/)
+  def packaged?(package, scope:) # this may not need to be a public method anymore.
+    # 
+    scopes = importmap.scan(/\bscope\b.*?(?:do|{).*?(?:end|})/m)
+    if scope
+      scopes.any? do |scope_block|
+        scope_block.match(/\bscope\b\s*['"](#{scope})['"]/) &&
+        scope_block.match(/\bpin\b\s+['"](#{package})['"].*/)
+      end
+    else
+      imports = importmap.gsub(/\bscope\b.*?(?:do|{).*?(?:end|})/m, '')
+      imports.match(/\bpin\b\s+['"](#{package})['"].*/)
+    end
   end
 
   def download(package, url)
@@ -62,6 +72,18 @@ class Importmap::Packager
     remove_package_from_importmap(package)
   end
 
+  def upsert(package, url, vendored:, scope:)
+    pin = vendored ? vendored_pin_for(package, url) : pin_for(package, url)
+    
+  # if scope exists, then check if the scope exists - if yes then check if package exists within scope - if yes then replace
+  #                                                                                                    - if no then append 
+  #                                                   if no then create scope and append
+  # if scope is false, then gsub all scopes and check if package exists there - if yes then replace
+  #                                                                           - if no then append
+
+  # use professional tools for file io
+  end
+
   private
     def post_json(body)
       Net::HTTP.post(self.class.endpoint, body.to_json, "Content-Type" => "application/json")
@@ -69,8 +91,8 @@ class Importmap::Packager
       raise HTTPError, "Unexpected transport error (#{error.class}: #{error.message})"
     end
 
-    def extract_parsed_imports(response)
-      JSON.parse(response.body).dig("map", "imports")
+    def extract_parsed_importmap(response)
+      JSON.parse(response.body).dig("map")
     end
 
     def handle_failure_response(response)

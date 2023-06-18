@@ -1,12 +1,15 @@
 require "pathname"
+require "importmap/scope"
 
 class Importmap::Map
   attr_reader :packages, :directories
+  attr_accessor :scoped_packages
 
   class InvalidFile < StandardError; end
 
   def initialize
     @packages, @directories = {}, {}
+    @scoped_packages = Hash.new { |h, k| h[k] = {} }
     @cache = {}
   end
 
@@ -35,6 +38,11 @@ class Importmap::Map
     @directories[dir] = MappedDir.new(dir: dir, under: under, path: to, preload: preload)
   end
 
+  def scope(scope, &block)
+    clear_cache
+    Importmap::Scope.new(self, scope).instance_eval &block
+  end
+
   # Returns an array of all the resolved module paths of the pinned packages. The `resolver` must respond to
   # `path_to_asset`, such as `ActionController::Base.helpers` or `ApplicationController.helpers`. You'll want to use the
   # resolver that has been configured for the `asset_host` you want these resolved paths to use. In case you need to
@@ -53,7 +61,12 @@ class Importmap::Map
   # `cache_key` to vary the cache used by this method for the different cases.
   def to_json(resolver:, cache_key: :json)
     cache_as(cache_key) do
-      JSON.pretty_generate({ "imports" => resolve_asset_paths(expanded_packages_and_directories, resolver: resolver) })
+      JSON.pretty_generate(
+        Hash.new.tap do |h|
+          h["imports"] = resolve_asset_paths(expanded_packages_and_directories, resolver: resolver)
+          h["scopes"] = resolve_scopes(@scoped_packages, resolver: resolver) if @scoped_packages.any?
+        end
+      )
     end
   end
 
@@ -116,6 +129,12 @@ class Importmap::Map
           end
         end
       end.compact
+    end
+
+    def resolve_scopes(scopes, resolver:)
+      scopes.transform_values do |paths|
+        resolve_asset_paths(paths, resolver: resolver)
+      end
     end
 
     def expanded_preloading_packages_and_directories
